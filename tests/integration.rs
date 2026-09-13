@@ -96,9 +96,9 @@ async fn default_served_response_counts_as_miss_in_metrics() {
     let addr = boot(state_with(Some("NA"))).await;
     get(addr, "/kv/zzz").await;
     let m = get(addr, "/metrics").await;
-    assert!(m.body.contains("justkv_hits_total 0"), "{}", m.body);
-    assert!(m.body.contains("justkv_misses_total 1"), "{}", m.body);
-    assert!(m.body.contains("justkv_defaults_served_total 1"), "{}", m.body);
+    assert!(m.body.contains("justkv_hits_total 0\n"), "{}", m.body);
+    assert!(m.body.contains("justkv_misses_total 1\n"), "{}", m.body);
+    assert!(m.body.contains("justkv_defaults_served_total 1\n"), "{}", m.body);
 }
 
 #[tokio::test]
@@ -157,8 +157,8 @@ async fn metrics_accumulate_hits_and_bytes() {
     get(addr, "/kv/a").await;
     get(addr, "/kv/b").await;
     let m = get(addr, "/metrics").await;
-    assert!(m.body.contains("justkv_requests_total 2"), "{}", m.body);
-    assert!(m.body.contains("justkv_hits_total 2"), "{}", m.body);
-    assert!(m.body.contains("justkv_response_bytes_total 2"), "{}", m.body);
-    assert!(m.body.contains("justkv_keys 4"), "{}", m.body);
+    assert!(m.body.contains("justkv_requests_total 2\n"), "{}", m.body);
+    assert!(m.body.contains("justkv_hits_total 2\n"), "{}", m.body);
+    assert!(m.body.contains("justkv_response_bytes_total 2\n"), "{}", m.body);
+    assert!(m.body.contains("justkv_keys 4\n"), "{}", m.body);
 }
