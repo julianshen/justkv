@@ -71,7 +71,11 @@ abs_data="$DATA"
 case "$abs_data" in
   "$repo_root"/*) ctx_data="${abs_data#"$repo_root"/}" ;;
   *)
-    ctx_data=".packdata.tmp"
+    # Keep the original basename: delimiter inference reads the extension, so
+    # copying a .tsv to a fixed name would silently make it comma-delimited
+    # inside the image — local validation passes, then the build fails with a
+    # confusing "expected 2 columns". The leading dot keeps it out of the way.
+    ctx_data=".packdata.$(basename "$DATA")"
     cp "$DATA" "$repo_root/$ctx_data"
     cleanup="$repo_root/$ctx_data"
     ;;
