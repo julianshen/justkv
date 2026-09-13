@@ -1,3 +1,5 @@
+pub mod csv_loader;
+
 use bytes::Bytes;
 use foldhash::fast::RandomState;
 use hashbrown::HashTable;
