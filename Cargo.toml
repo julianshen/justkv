@@ -3,4 +3,29 @@ name = "justkv"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "justkv"
+path = "src/lib.rs"
+
+[[bin]]
+name = "justkv"
+path = "src/main.rs"
+
 [dependencies]
+anyhow = "1"
+axum = "0.8"
+bytes = "1"
+clap = { version = "4", features = ["derive", "env"] }
+csv = "1.4"
+foldhash = "0.2"
+hashbrown = "0.17"
+percent-encoding = "2"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "io-util"] }
+
+[dev-dependencies]
+proptest = "1"
+
+[[example]]
+name = "gen"
+path = "bench/gen.rs"
