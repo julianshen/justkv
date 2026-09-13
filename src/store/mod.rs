@@ -51,7 +51,11 @@ impl Store {
             let h = hash_key(&hasher, e.key(&arena));
             table.insert_unique(h, e, |other| hash_key(&hasher, other.key(&arena)));
         }
-        Store { arena, table, hasher }
+        Store {
+            arena,
+            table,
+            hasher,
+        }
     }
 
     /// Look up a key. The returned `Bytes` points into the shared arena —
@@ -60,7 +64,10 @@ impl Store {
     pub fn get(&self, key: &[u8]) -> Option<Bytes> {
         let h = hash_key(&self.hasher, key);
         let e = self.table.find(h, |e| e.key(&self.arena) == key)?;
-        Some(self.arena.slice(e.v_off as usize..(e.v_off + e.v_len) as usize))
+        Some(
+            self.arena
+                .slice(e.v_off as usize..(e.v_off + e.v_len) as usize),
+        )
     }
 
     pub fn len(&self) -> usize {
@@ -146,7 +153,11 @@ pub fn load(path: &Path, opts: &LoadOptions) -> Result<Loaded, LoadFailure> {
         (a, e, SourceFormat::Compiled, f)
     } else {
         let (a, e) = parse_csv(&data, opts).map_err(LoadFailure::Data)?;
-        let f = if opts.allow_binary { compiled::FLAG_BINARY } else { 0 };
+        let f = if opts.allow_binary {
+            compiled::FLAG_BINARY
+        } else {
+            0
+        };
         (a, e, SourceFormat::Csv, f)
     };
 
@@ -169,8 +180,18 @@ mod tests {
         // "akey"+"aval"+"bkey"+"bval"
         let arena = b"akeyavalbkeybval".to_vec();
         let entries = vec![
-            Entry { k_off: 0, k_len: 4, v_off: 4, v_len: 4 },
-            Entry { k_off: 8, k_len: 4, v_off: 12, v_len: 4 },
+            Entry {
+                k_off: 0,
+                k_len: 4,
+                v_off: 4,
+                v_len: 4,
+            },
+            Entry {
+                k_off: 8,
+                k_len: 4,
+                v_off: 12,
+                v_len: 4,
+            },
         ];
         Store::from_parts(arena, entries)
     }
@@ -199,8 +220,18 @@ mod tests {
         let arena = b"x".to_vec();
         // key "" -> value "x", and key "x" -> value ""
         let entries = vec![
-            Entry { k_off: 0, k_len: 0, v_off: 0, v_len: 1 },
-            Entry { k_off: 0, k_len: 1, v_off: 0, v_len: 0 },
+            Entry {
+                k_off: 0,
+                k_len: 0,
+                v_off: 0,
+                v_len: 1,
+            },
+            Entry {
+                k_off: 0,
+                k_len: 1,
+                v_off: 0,
+                v_len: 0,
+            },
         ];
         let s = Store::from_parts(arena, entries);
         assert_eq!(s.get(b"").as_deref(), Some(&b"x"[..]));

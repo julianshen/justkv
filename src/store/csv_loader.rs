@@ -14,7 +14,11 @@ pub struct LoadOptions {
 
 impl Default for LoadOptions {
     fn default() -> Self {
-        LoadOptions { delimiter: b',', has_header: false, allow_binary: false }
+        LoadOptions {
+            delimiter: b',',
+            has_header: false,
+            allow_binary: false,
+        }
     }
 }
 
@@ -55,7 +59,10 @@ impl fmt::Display for DataError {
                 write!(f, "duplicate key {key:?}, first seen on line {first_line}")
             }
             DataErrorKind::InvalidUtf8Value => {
-                write!(f, "value is not valid UTF-8 (pass --allow-binary to permit)")
+                write!(
+                    f,
+                    "value is not valid UTF-8 (pass --allow-binary to permit)"
+                )
             }
             DataErrorKind::Malformed(msg) => write!(f, "malformed row: {msg}"),
             DataErrorKind::TooLarge => {
@@ -83,10 +90,7 @@ fn hash_bytes(state: &RandomState, b: &[u8]) -> u64 {
 /// copying every key would cost tens of megabytes at 1M keys and defeat the
 /// point of the packed layout. Instead we index entry positions and compare
 /// against arena slices.
-pub fn parse_csv(
-    data: &[u8],
-    opts: &LoadOptions,
-) -> Result<(Vec<u8>, Vec<Entry>), Vec<DataError>> {
+pub fn parse_csv(data: &[u8], opts: &LoadOptions) -> Result<(Vec<u8>, Vec<Entry>), Vec<DataError>> {
     let mut rdr = csv::ReaderBuilder::new()
         .delimiter(opts.delimiter)
         .has_headers(opts.has_header)
@@ -146,12 +150,18 @@ pub fn parse_csv(
         }
 
         if !opts.allow_binary && std::str::from_utf8(val).is_err() {
-            errors.push(DataError { line, kind: DataErrorKind::InvalidUtf8Value });
+            errors.push(DataError {
+                line,
+                kind: DataErrorKind::InvalidUtf8Value,
+            });
             continue;
         }
 
         if arena.len() + key.len() + val.len() > u32::MAX as usize {
-            errors.push(DataError { line, kind: DataErrorKind::TooLarge });
+            errors.push(DataError {
+                line,
+                kind: DataErrorKind::TooLarge,
+            });
             break;
         }
 
@@ -170,7 +180,10 @@ pub fn parse_csv(
         lines.push(line);
         seen.insert_unique(kh, idx, |&i| {
             let e = &entries[i as usize];
-            hash_bytes(&state, &arena[e.k_off as usize..(e.k_off + e.k_len) as usize])
+            hash_bytes(
+                &state,
+                &arena[e.k_off as usize..(e.k_off + e.k_len) as usize],
+            )
         });
     }
 
@@ -210,7 +223,10 @@ mod tests {
 
     #[test]
     fn parses_tab_separated_values() {
-        let opts = LoadOptions { delimiter: b'\t', ..LoadOptions::default() };
+        let opts = LoadOptions {
+            delimiter: b'\t',
+            ..LoadOptions::default()
+        };
         let s = parse_ok(b"a\t1\nb\t2\n", &opts);
         assert_eq!(s.get(b"a").as_deref(), Some(&b"1"[..]));
     }
@@ -237,7 +253,10 @@ mod tests {
 
     #[test]
     fn skips_header_row_when_requested() {
-        let opts = LoadOptions { has_header: true, ..LoadOptions::default() };
+        let opts = LoadOptions {
+            has_header: true,
+            ..LoadOptions::default()
+        };
         let s = parse_ok(b"key,value\na,1\n", &opts);
         assert_eq!(s.len(), 1);
         assert!(s.get(b"key").is_none());
@@ -262,14 +281,20 @@ mod tests {
     fn wrong_column_count_reports_line_and_count() {
         let errs = parse_csv(b"a,1\nb,2,3\n", &LoadOptions::default()).unwrap_err();
         assert_eq!(errs[0].line, 2);
-        assert!(matches!(errs[0].kind, DataErrorKind::WrongColumnCount { found: 3 }));
+        assert!(matches!(
+            errs[0].kind,
+            DataErrorKind::WrongColumnCount { found: 3 }
+        ));
     }
 
     #[test]
     fn collects_every_error_not_just_the_first() {
         let errs = parse_csv(b"a,1\nb\nc,2,3\na,9\n", &LoadOptions::default()).unwrap_err();
         assert_eq!(errs.len(), 3, "got: {errs:?}");
-        assert_eq!(errs.iter().map(|e| e.line).collect::<Vec<_>>(), vec![2, 3, 4]);
+        assert_eq!(
+            errs.iter().map(|e| e.line).collect::<Vec<_>>(),
+            vec![2, 3, 4]
+        );
     }
 
     #[test]
@@ -280,7 +305,10 @@ mod tests {
 
     #[test]
     fn accepts_non_utf8_value_when_allow_binary() {
-        let opts = LoadOptions { allow_binary: true, ..LoadOptions::default() };
+        let opts = LoadOptions {
+            allow_binary: true,
+            ..LoadOptions::default()
+        };
         let s = parse_ok(b"k,\xff\xfe\n", &opts);
         assert_eq!(s.get(b"k").as_deref(), Some(&b"\xff\xfe"[..]));
     }

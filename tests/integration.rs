@@ -29,17 +29,41 @@ async fn get(addr: SocketAddr, target: &str) -> Resp {
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|c| c.parse().ok())
         .unwrap_or(0);
-    Resp { status, headers: head.to_lowercase(), body: body.to_string() }
+    Resp {
+        status,
+        headers: head.to_lowercase(),
+        body: body.to_string(),
+    }
 }
 
 fn state_with(default_value: Option<&str>) -> Arc<AppState> {
     // keys: "a"->"1", "b"->"2", "a/b"->"slash", ""->"empty"
     let arena = b"a1b2a/bslashempty".to_vec();
     let entries = vec![
-        justkv::store::Entry { k_off: 0, k_len: 1, v_off: 1, v_len: 1 },
-        justkv::store::Entry { k_off: 2, k_len: 1, v_off: 3, v_len: 1 },
-        justkv::store::Entry { k_off: 4, k_len: 3, v_off: 7, v_len: 5 },
-        justkv::store::Entry { k_off: 0, k_len: 0, v_off: 12, v_len: 5 },
+        justkv::store::Entry {
+            k_off: 0,
+            k_len: 1,
+            v_off: 1,
+            v_len: 1,
+        },
+        justkv::store::Entry {
+            k_off: 2,
+            k_len: 1,
+            v_off: 3,
+            v_len: 1,
+        },
+        justkv::store::Entry {
+            k_off: 4,
+            k_len: 3,
+            v_off: 7,
+            v_len: 5,
+        },
+        justkv::store::Entry {
+            k_off: 0,
+            k_len: 0,
+            v_off: 12,
+            v_len: 5,
+        },
     ];
     let store = Store::from_parts(arena, entries);
     Arc::new(AppState {
@@ -69,7 +93,12 @@ async fn hit_returns_value_with_text_plain() {
     let r = get(addr, "/kv/a").await;
     assert_eq!(r.status, 200);
     assert_eq!(r.body, "1");
-    assert!(r.headers.contains("content-type: text/plain; charset=utf-8"), "{}", r.headers);
+    assert!(
+        r.headers
+            .contains("content-type: text/plain; charset=utf-8"),
+        "{}",
+        r.headers
+    );
     assert!(r.headers.contains("content-length: 1"), "{}", r.headers);
     assert!(!r.headers.contains("x-justkv-default"));
 }
@@ -98,7 +127,11 @@ async fn default_served_response_counts_as_miss_in_metrics() {
     let m = get(addr, "/metrics").await;
     assert!(m.body.contains("justkv_hits_total 0\n"), "{}", m.body);
     assert!(m.body.contains("justkv_misses_total 1\n"), "{}", m.body);
-    assert!(m.body.contains("justkv_defaults_served_total 1\n"), "{}", m.body);
+    assert!(
+        m.body.contains("justkv_defaults_served_total 1\n"),
+        "{}",
+        m.body
+    );
 }
 
 #[tokio::test]
@@ -159,6 +192,10 @@ async fn metrics_accumulate_hits_and_bytes() {
     let m = get(addr, "/metrics").await;
     assert!(m.body.contains("justkv_requests_total 2\n"), "{}", m.body);
     assert!(m.body.contains("justkv_hits_total 2\n"), "{}", m.body);
-    assert!(m.body.contains("justkv_response_bytes_total 2\n"), "{}", m.body);
+    assert!(
+        m.body.contains("justkv_response_bytes_total 2\n"),
+        "{}",
+        m.body
+    );
     assert!(m.body.contains("justkv_keys 4\n"), "{}", m.body);
 }

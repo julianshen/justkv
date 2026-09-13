@@ -18,7 +18,9 @@ fn to_csv(pairs: &[(String, String)]) -> Vec<u8> {
 fn unique_pairs() -> impl Strategy<Value = Vec<(String, String)>> {
     prop::collection::vec((".{0,12}", ".{0,24}"), 0..40).prop_map(|v| {
         let mut seen = std::collections::HashSet::new();
-        v.into_iter().filter(|(k, _)| seen.insert(k.clone())).collect()
+        v.into_iter()
+            .filter(|(k, _)| seen.insert(k.clone()))
+            .collect()
     })
 }
 

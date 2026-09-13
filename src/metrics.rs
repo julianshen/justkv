@@ -70,7 +70,10 @@ impl Metrics {
         }
         if let Some(d) = elapsed {
             let secs = d.as_secs_f64();
-            let idx = BUCKETS.iter().position(|&b| secs <= b).unwrap_or(BUCKETS.len());
+            let idx = BUCKETS
+                .iter()
+                .position(|&b| secs <= b)
+                .unwrap_or(BUCKETS.len());
             self.buckets[idx].fetch_add(1, Relaxed);
             self.sum_nanos.fetch_add(d.as_nanos() as u64, Relaxed);
             self.timed.fetch_add(1, Relaxed);
@@ -91,28 +94,76 @@ impl Metrics {
             let _ = writeln!(o, "{name} {v}");
         };
 
-        counter(&mut o, "justkv_requests_total", "Total key lookups served.", self.requests.load(Relaxed));
-        counter(&mut o, "justkv_hits_total", "Lookups that found a key.", self.hits.load(Relaxed));
-        counter(&mut o, "justkv_misses_total", "Lookups with no matching key, including those served a default.", self.misses.load(Relaxed));
-        counter(&mut o, "justkv_defaults_served_total", "Misses answered with the configured default value.", self.defaults.load(Relaxed));
-        counter(&mut o, "justkv_response_bytes_total", "Value bytes written to clients.", self.bytes.load(Relaxed));
+        counter(
+            &mut o,
+            "justkv_requests_total",
+            "Total key lookups served.",
+            self.requests.load(Relaxed),
+        );
+        counter(
+            &mut o,
+            "justkv_hits_total",
+            "Lookups that found a key.",
+            self.hits.load(Relaxed),
+        );
+        counter(
+            &mut o,
+            "justkv_misses_total",
+            "Lookups with no matching key, including those served a default.",
+            self.misses.load(Relaxed),
+        );
+        counter(
+            &mut o,
+            "justkv_defaults_served_total",
+            "Misses answered with the configured default value.",
+            self.defaults.load(Relaxed),
+        );
+        counter(
+            &mut o,
+            "justkv_response_bytes_total",
+            "Value bytes written to clients.",
+            self.bytes.load(Relaxed),
+        );
 
-        let _ = writeln!(o, "# HELP justkv_request_duration_seconds Lookup handling latency.");
+        let _ = writeln!(
+            o,
+            "# HELP justkv_request_duration_seconds Lookup handling latency."
+        );
         let _ = writeln!(o, "# TYPE justkv_request_duration_seconds histogram");
         let mut cumulative = 0u64;
         for (i, b) in BUCKETS.iter().enumerate() {
             cumulative += self.buckets[i].load(Relaxed);
-            let _ = writeln!(o, "justkv_request_duration_seconds_bucket{{le=\"{b}\"}} {cumulative}");
+            let _ = writeln!(
+                o,
+                "justkv_request_duration_seconds_bucket{{le=\"{b}\"}} {cumulative}"
+            );
         }
         cumulative += self.buckets[BUCKETS.len()].load(Relaxed);
-        let _ = writeln!(o, "justkv_request_duration_seconds_bucket{{le=\"+Inf\"}} {cumulative}");
+        let _ = writeln!(
+            o,
+            "justkv_request_duration_seconds_bucket{{le=\"+Inf\"}} {cumulative}"
+        );
         let sum = self.sum_nanos.load(Relaxed) as f64 / 1e9;
         let _ = writeln!(o, "justkv_request_duration_seconds_sum {sum}");
-        let _ = writeln!(o, "justkv_request_duration_seconds_count {}", self.timed.load(Relaxed));
+        let _ = writeln!(
+            o,
+            "justkv_request_duration_seconds_count {}",
+            self.timed.load(Relaxed)
+        );
 
         gauge(&mut o, "justkv_keys", "Keys loaded.", keys as u64);
-        gauge(&mut o, "justkv_arena_bytes", "Bytes of key and value data held in memory.", arena_bytes as u64);
-        gauge(&mut o, "justkv_uptime_seconds", "Seconds since the server finished loading.", uptime.as_secs());
+        gauge(
+            &mut o,
+            "justkv_arena_bytes",
+            "Bytes of key and value data held in memory.",
+            arena_bytes as u64,
+        );
+        gauge(
+            &mut o,
+            "justkv_uptime_seconds",
+            "Seconds since the server finished loading.",
+            uptime.as_secs(),
+        );
 
         o
     }
@@ -136,9 +187,15 @@ mod tests {
         m.record(Outcome::Miss, 0, None);
         m.record(Outcome::Default, 3, None);
         let out = m.render(2, 16, Duration::from_secs(5));
-        assert_eq!(line(&out, "justkv_requests_total"), "justkv_requests_total 3");
+        assert_eq!(
+            line(&out, "justkv_requests_total"),
+            "justkv_requests_total 3"
+        );
         assert_eq!(line(&out, "justkv_hits_total"), "justkv_hits_total 1");
-        assert_eq!(line(&out, "justkv_response_bytes_total"), "justkv_response_bytes_total 13");
+        assert_eq!(
+            line(&out, "justkv_response_bytes_total"),
+            "justkv_response_bytes_total 13"
+        );
     }
 
     #[test]
@@ -148,7 +205,10 @@ mod tests {
         let out = m.render(0, 0, Duration::from_secs(1));
         assert_eq!(line(&out, "justkv_misses_total"), "justkv_misses_total 1");
         assert_eq!(line(&out, "justkv_hits_total"), "justkv_hits_total 0");
-        assert_eq!(line(&out, "justkv_defaults_served_total"), "justkv_defaults_served_total 1");
+        assert_eq!(
+            line(&out, "justkv_defaults_served_total"),
+            "justkv_defaults_served_total 1"
+        );
     }
 
     #[test]
@@ -156,20 +216,38 @@ mod tests {
         let out = Metrics::new().render(42, 4096, Duration::from_secs(7));
         assert_eq!(line(&out, "justkv_keys"), "justkv_keys 42");
         assert_eq!(line(&out, "justkv_arena_bytes"), "justkv_arena_bytes 4096");
-        assert_eq!(line(&out, "justkv_uptime_seconds"), "justkv_uptime_seconds 7");
+        assert_eq!(
+            line(&out, "justkv_uptime_seconds"),
+            "justkv_uptime_seconds 7"
+        );
     }
 
     #[test]
     fn histogram_buckets_are_cumulative_and_end_with_inf() {
         let m = Metrics::new();
-        m.record(Outcome::Hit, 1, Some(Duration::from_micros(30)));   // > 25us
-        m.record(Outcome::Hit, 1, Some(Duration::from_micros(200)));  // > 100us
+        m.record(Outcome::Hit, 1, Some(Duration::from_micros(30))); // > 25us
+        m.record(Outcome::Hit, 1, Some(Duration::from_micros(200))); // > 100us
         let out = m.render(0, 0, Duration::from_secs(1));
-        assert!(out.contains(r#"justkv_request_duration_seconds_bucket{le="0.000025"} 0"#), "{out}");
-        assert!(out.contains(r#"justkv_request_duration_seconds_bucket{le="0.00005"} 1"#), "{out}");
-        assert!(out.contains(r#"justkv_request_duration_seconds_bucket{le="0.00025"} 2"#), "{out}");
-        assert!(out.contains(r#"justkv_request_duration_seconds_bucket{le="+Inf"} 2"#), "{out}");
-        assert!(out.contains("justkv_request_duration_seconds_count 2"), "{out}");
+        assert!(
+            out.contains(r#"justkv_request_duration_seconds_bucket{le="0.000025"} 0"#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"justkv_request_duration_seconds_bucket{le="0.00005"} 1"#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"justkv_request_duration_seconds_bucket{le="0.00025"} 2"#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"justkv_request_duration_seconds_bucket{le="+Inf"} 2"#),
+            "{out}"
+        );
+        assert!(
+            out.contains("justkv_request_duration_seconds_count 2"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -177,21 +255,38 @@ mod tests {
         let m = Metrics::new();
         m.record(Outcome::Hit, 1, None);
         let out = m.render(0, 0, Duration::from_secs(1));
-        assert!(out.contains("justkv_request_duration_seconds_count 0"), "{out}");
-        assert_eq!(line(&out, "justkv_requests_total"), "justkv_requests_total 1");
+        assert!(
+            out.contains("justkv_request_duration_seconds_count 0"),
+            "{out}"
+        );
+        assert_eq!(
+            line(&out, "justkv_requests_total"),
+            "justkv_requests_total 1"
+        );
     }
 
     #[test]
     fn output_declares_help_and_type_for_every_metric() {
         let out = Metrics::new().render(0, 0, Duration::from_secs(1));
         for name in [
-            "justkv_requests_total", "justkv_hits_total", "justkv_misses_total",
-            "justkv_defaults_served_total", "justkv_response_bytes_total",
-            "justkv_request_duration_seconds", "justkv_keys",
-            "justkv_arena_bytes", "justkv_uptime_seconds",
+            "justkv_requests_total",
+            "justkv_hits_total",
+            "justkv_misses_total",
+            "justkv_defaults_served_total",
+            "justkv_response_bytes_total",
+            "justkv_request_duration_seconds",
+            "justkv_keys",
+            "justkv_arena_bytes",
+            "justkv_uptime_seconds",
         ] {
-            assert!(out.contains(&format!("# TYPE {name} ")), "missing TYPE for {name}:\n{out}");
-            assert!(out.contains(&format!("# HELP {name} ")), "missing HELP for {name}:\n{out}");
+            assert!(
+                out.contains(&format!("# TYPE {name} ")),
+                "missing TYPE for {name}:\n{out}"
+            );
+            assert!(
+                out.contains(&format!("# HELP {name} ")),
+                "missing HELP for {name}:\n{out}"
+            );
         }
     }
 }

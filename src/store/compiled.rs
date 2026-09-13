@@ -80,9 +80,15 @@ pub fn read_compiled(data: &[u8]) -> Result<(Vec<u8>, Vec<Entry>, u32), Compiled
     let arena_len = le_u32(&data[16..20]) as usize;
 
     let entries_end = HEADER_LEN
-        .checked_add(count.checked_mul(ENTRY_LEN).ok_or(CompiledError::Truncated)?)
+        .checked_add(
+            count
+                .checked_mul(ENTRY_LEN)
+                .ok_or(CompiledError::Truncated)?,
+        )
         .ok_or(CompiledError::Truncated)?;
-    let total = entries_end.checked_add(arena_len).ok_or(CompiledError::Truncated)?;
+    let total = entries_end
+        .checked_add(arena_len)
+        .ok_or(CompiledError::Truncated)?;
     if data.len() < total {
         return Err(CompiledError::Truncated);
     }
@@ -121,8 +127,18 @@ mod tests {
         (
             b"akeyavalbkeybval".to_vec(),
             vec![
-                Entry { k_off: 0, k_len: 4, v_off: 4, v_len: 4 },
-                Entry { k_off: 8, k_len: 4, v_off: 12, v_len: 4 },
+                Entry {
+                    k_off: 0,
+                    k_len: 4,
+                    v_off: 4,
+                    v_len: 4,
+                },
+                Entry {
+                    k_off: 8,
+                    k_len: 4,
+                    v_off: 12,
+                    v_len: 4,
+                },
             ],
         )
     }
@@ -177,7 +193,10 @@ mod tests {
 
     #[test]
     fn rejects_truncated_header() {
-        assert!(matches!(read_compiled(b"JUSTKV01").unwrap_err(), CompiledError::Truncated));
+        assert!(matches!(
+            read_compiled(b"JUSTKV01").unwrap_err(),
+            CompiledError::Truncated
+        ));
     }
 
     #[test]
@@ -186,24 +205,43 @@ mod tests {
         let mut buf = Vec::new();
         write_compiled(&mut buf, &arena, &entries, 0).unwrap();
         buf.truncate(buf.len() - 4);
-        assert!(matches!(read_compiled(&buf).unwrap_err(), CompiledError::Truncated));
+        assert!(matches!(
+            read_compiled(&buf).unwrap_err(),
+            CompiledError::Truncated
+        ));
     }
 
     #[test]
     fn rejects_entry_pointing_outside_arena() {
         let arena = b"abc".to_vec();
-        let entries = vec![Entry { k_off: 0, k_len: 1, v_off: 1, v_len: 99 }];
+        let entries = vec![Entry {
+            k_off: 0,
+            k_len: 1,
+            v_off: 1,
+            v_len: 99,
+        }];
         let mut buf = Vec::new();
         write_compiled(&mut buf, &arena, &entries, 0).unwrap();
-        assert!(matches!(read_compiled(&buf).unwrap_err(), CompiledError::OutOfBounds { index: 0 }));
+        assert!(matches!(
+            read_compiled(&buf).unwrap_err(),
+            CompiledError::OutOfBounds { index: 0 }
+        ));
     }
 
     #[test]
     fn rejects_entry_whose_offset_plus_length_would_overflow() {
         let arena = b"abc".to_vec();
-        let entries = vec![Entry { k_off: u32::MAX, k_len: u32::MAX, v_off: 0, v_len: 1 }];
+        let entries = vec![Entry {
+            k_off: u32::MAX,
+            k_len: u32::MAX,
+            v_off: 0,
+            v_len: 1,
+        }];
         let mut buf = Vec::new();
         write_compiled(&mut buf, &arena, &entries, 0).unwrap();
-        assert!(matches!(read_compiled(&buf).unwrap_err(), CompiledError::OutOfBounds { index: 0 }));
+        assert!(matches!(
+            read_compiled(&buf).unwrap_err(),
+            CompiledError::OutOfBounds { index: 0 }
+        ));
     }
 }

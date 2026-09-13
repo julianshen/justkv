@@ -25,9 +25,7 @@ pub(crate) fn key_from_query(q: Option<&str>) -> Option<Vec<u8>> {
                 .iter()
                 .map(|&b| if b == b'+' { b' ' } else { b })
                 .collect();
-            return Some(
-                percent_encoding::percent_decode(&plus_decoded).collect::<Vec<u8>>(),
-            );
+            return Some(percent_encoding::percent_decode(&plus_decoded).collect::<Vec<u8>>());
         }
     }
     None
@@ -80,12 +78,13 @@ pub async fn health() -> &'static str {
 }
 
 pub async fn metrics(State(s): State<Arc<AppState>>) -> Response {
-    let text = s
-        .metrics
-        .render(s.keys, s.arena_bytes, s.started.elapsed());
+    let text = s.metrics.render(s.keys, s.arena_bytes, s.started.elapsed());
     Response::builder()
         .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")
+        .header(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )
         .body(Body::from(text))
         .unwrap()
 }
@@ -114,7 +113,10 @@ mod tests {
     #[test]
     fn extracts_k_parameter_from_raw_query() {
         assert_eq!(key_from_query(Some("k=abc")).as_deref(), Some(&b"abc"[..]));
-        assert_eq!(key_from_query(Some("x=1&k=abc&y=2")).as_deref(), Some(&b"abc"[..]));
+        assert_eq!(
+            key_from_query(Some("x=1&k=abc&y=2")).as_deref(),
+            Some(&b"abc"[..])
+        );
     }
 
     #[test]
@@ -130,8 +132,14 @@ mod tests {
 
     #[test]
     fn percent_decodes_and_allows_non_utf8_bytes() {
-        assert_eq!(key_from_query(Some("k=a%2Fb")).as_deref(), Some(&b"a/b"[..]));
-        assert_eq!(key_from_query(Some("k=%FF%FE")).as_deref(), Some(&b"\xff\xfe"[..]));
+        assert_eq!(
+            key_from_query(Some("k=a%2Fb")).as_deref(),
+            Some(&b"a/b"[..])
+        );
+        assert_eq!(
+            key_from_query(Some("k=%FF%FE")).as_deref(),
+            Some(&b"\xff\xfe"[..])
+        );
     }
 
     #[test]

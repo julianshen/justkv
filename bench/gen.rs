@@ -6,7 +6,10 @@ use std::io::{BufWriter, Write};
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let rows: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1_000_000);
+    let rows: usize = args
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1_000_000);
     let out = args.get(2).map(String::as_str).unwrap_or("bench/kv.tsv");
 
     let f = std::fs::File::create(out)?;

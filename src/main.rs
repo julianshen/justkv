@@ -4,7 +4,7 @@ use justkv::metrics::Metrics;
 use justkv::server::{AppState, DEFAULT_CONTENT_TYPE, run};
 use justkv::store::compiled;
 use justkv::store::csv_loader::parse_csv;
-use justkv::store::{Loaded, LoadFailure, compiled::FLAG_BINARY, load};
+use justkv::store::{LoadFailure, Loaded, compiled::FLAG_BINARY, load};
 use std::io::{Read, Write};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -71,7 +71,11 @@ fn cmd_build(args: BuildArgs) -> u8 {
         Ok(parts) => parts,
         Err(code) => return code,
     };
-    let flags = if args.parse.allow_binary { compiled::FLAG_BINARY } else { 0 };
+    let flags = if args.parse.allow_binary {
+        compiled::FLAG_BINARY
+    } else {
+        0
+    };
 
     // Write to a temporary sibling then rename, so a failed build never
     // leaves a half-written artifact that a later stage would happily load.
@@ -141,7 +145,9 @@ fn cmd_serve(args: ServeArgs) -> u8 {
         load_ms: loaded.load_duration.as_secs_f64() * 1000.0,
         store: Arc::new(loaded.store),
         metrics: Arc::new(Metrics::new()),
-        default_value: args.default_value.map(|s| bytes::Bytes::from(s.into_bytes())),
+        default_value: args
+            .default_value
+            .map(|s| bytes::Bytes::from(s.into_bytes())),
         content_type,
         started: Instant::now(),
         timing: !args.no_metrics,
@@ -176,7 +182,10 @@ fn cmd_serve(args: ServeArgs) -> u8 {
 /// localhost GET would be pure weight.
 fn cmd_healthcheck(args: HealthArgs) -> u8 {
     // 0.0.0.0 is a bind address, not a destination.
-    let target = args.bind.replace("0.0.0.0:", "127.0.0.1:").replace("[::]:", "[::1]:");
+    let target = args
+        .bind
+        .replace("0.0.0.0:", "127.0.0.1:")
+        .replace("[::]:", "[::1]:");
 
     let timeout = std::time::Duration::from_secs(2);
     let addrs: Vec<std::net::SocketAddr> = match std::net::ToSocketAddrs::to_socket_addrs(&target) {
@@ -216,7 +225,10 @@ fn cmd_healthcheck(args: HealthArgs) -> u8 {
     if head.starts_with("HTTP/1.1 200") {
         0
     } else {
-        eprintln!("healthcheck: unexpected response: {}", head.lines().next().unwrap_or(""));
+        eprintln!(
+            "healthcheck: unexpected response: {}",
+            head.lines().next().unwrap_or("")
+        );
         1
     }
 }
