@@ -80,6 +80,87 @@ impl Store {
     }
 }
 
+pub mod compiled;
+
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use crate::store::compiled::CompiledError;
+use crate::store::csv_loader::{DataError, LoadOptions, parse_csv};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceFormat {
+    Csv,
+    Compiled,
+}
+
+impl SourceFormat {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SourceFormat::Csv => "csv",
+            SourceFormat::Compiled => "compiled",
+        }
+    }
+}
+
+pub struct Loaded {
+    pub store: Store,
+    pub format: SourceFormat,
+    pub flags: u32,
+    pub load_duration: Duration,
+    pub source: PathBuf,
+}
+
+#[derive(Debug)]
+pub enum LoadFailure {
+    Io(std::io::Error),
+    Data(Vec<DataError>),
+    Compiled(CompiledError),
+}
+
+impl std::fmt::Display for LoadFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LoadFailure::Io(e) => write!(f, "{e}"),
+            LoadFailure::Compiled(e) => write!(f, "{e}"),
+            LoadFailure::Data(errs) => {
+                for e in errs {
+                    writeln!(f, "{e}")?;
+                }
+                write!(f, "{} problem(s) found", errs.len())
+            }
+        }
+    }
+}
+
+impl std::error::Error for LoadFailure {}
+
+/// Load a dataset, choosing the loader by magic bytes so one binary serves
+/// both a compiled artifact in production and a raw CSV in development.
+pub fn load(path: &Path, opts: &LoadOptions) -> Result<Loaded, LoadFailure> {
+    let started = Instant::now();
+    let data = std::fs::read(path).map_err(LoadFailure::Io)?;
+
+    let (arena, entries, format, flags) = if compiled::is_compiled(&data) {
+        let (a, e, f) = compiled::read_compiled(&data).map_err(LoadFailure::Compiled)?;
+        (a, e, SourceFormat::Compiled, f)
+    } else {
+        let (a, e) = parse_csv(&data, opts).map_err(LoadFailure::Data)?;
+        let f = if opts.allow_binary { compiled::FLAG_BINARY } else { 0 };
+        (a, e, SourceFormat::Csv, f)
+    };
+
+    drop(data); // release the file buffer before building the table
+    let store = Store::from_parts(arena, entries);
+    Ok(Loaded {
+        store,
+        format,
+        flags,
+        load_duration: started.elapsed(),
+        source: path.to_path_buf(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
