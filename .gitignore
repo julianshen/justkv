@@ -1,3 +1,4 @@
 /target
 bench/kv.tsv
 bench/kv.bin
+.packdata.*
