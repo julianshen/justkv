@@ -9,7 +9,13 @@ set -euo pipefail
 DATA=""
 TAG="justkv:latest"
 PLATFORM="linux/amd64"
-CHECK_FLAGS=""
+# Parsing options are kept as an array, and as individual values for the build
+# args. A delimiter can legitimately be a glob character or whitespace, and a
+# single flat string would be word-split and pathname-expanded at every use.
+FLAGS=()
+DELIMITER=""
+HEADER=0
+ALLOW_BINARY=0
 
 usage() {
   cat <<'USAGE'
@@ -27,9 +33,9 @@ while [[ $# -gt 0 ]]; do
     --data)          DATA="$2"; shift 2 ;;
     --tag)           TAG="$2"; shift 2 ;;
     --platform)      PLATFORM="$2"; shift 2 ;;
-    --allow-binary)  CHECK_FLAGS="$CHECK_FLAGS --allow-binary"; shift ;;
-    --header)        CHECK_FLAGS="$CHECK_FLAGS --header"; shift ;;
-    --delimiter)     CHECK_FLAGS="$CHECK_FLAGS --delimiter $2"; shift 2 ;;
+    --allow-binary)  ALLOW_BINARY=1; FLAGS+=(--allow-binary); shift ;;
+    --header)        HEADER=1; FLAGS+=(--header); shift ;;
+    --delimiter)     DELIMITER="$2"; FLAGS+=(--delimiter "$2"); shift 2 ;;
     -h|--help)       usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage; exit 2 ;;
   esac
@@ -54,8 +60,9 @@ cd "$repo_root"
 # Fast local validation: seconds of feedback instead of a full image build.
 echo "==> validating $DATA"
 if command -v cargo >/dev/null 2>&1; then
-  # shellcheck disable=SC2086
-  cargo run --quiet --release -- check "$DATA" $CHECK_FLAGS
+  # The ${FLAGS[@]+...} guard keeps an empty array from tripping `set -u` on
+  # bash releases before 4.4, which macOS still ships.
+  cargo run --quiet --release -- check "$DATA" ${FLAGS[@]+"${FLAGS[@]}"}
 else
   echo "    cargo not found; skipping local validation (the build stage still validates)"
 fi
@@ -75,7 +82,11 @@ case "$abs_data" in
     # copying a .tsv to a fixed name would silently make it comma-delimited
     # inside the image — local validation passes, then the build fails with a
     # confusing "expected 2 columns". The leading dot keeps it out of the way.
-    ctx_data=".packdata.$(basename "$DATA")"
+    #
+    # The pid makes the name unique per invocation. Two packaging runs whose
+    # datasets share a basename would otherwise write and delete the same file
+    # in the context, so one could snapshot the other's data or find it gone.
+    ctx_data=".packdata.$$.$(basename "$DATA")"
     cp "$DATA" "$repo_root/$ctx_data"
     cleanup="$repo_root/$ctx_data"
     ;;
@@ -83,10 +94,14 @@ esac
 trap '[[ -n "$cleanup" ]] && rm -f "$cleanup"' EXIT
 
 echo "==> building $TAG for $PLATFORM from $ctx_data"
+# Each parsing option travels as its own build arg. Collapsing them into one
+# string would hand the delimiter back to word splitting inside the image.
 docker buildx build \
   --platform "$PLATFORM" \
   --build-arg "DATA=$ctx_data" \
-  --build-arg "CHECK_FLAGS=$CHECK_FLAGS" \
+  --build-arg "DELIMITER=$DELIMITER" \
+  --build-arg "HEADER=$HEADER" \
+  --build-arg "ALLOW_BINARY=$ALLOW_BINARY" \
   --tag "$TAG" \
   --load \
   .
