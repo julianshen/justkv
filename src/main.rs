@@ -66,6 +66,50 @@ fn cmd_check(args: DataArgs) -> u8 {
     }
 }
 
+/// Create a scratch file in the output's own directory, for a later rename.
+///
+/// It has to be a sibling so the rename stays within one filesystem and is
+/// therefore atomic. It must not be a *predictable* sibling: deriving the name
+/// by swapping the extension meant `-o kv.bin` opened `kv.tmp` with truncation,
+/// destroying an unrelated file of the user's and racing any concurrent build
+/// whose output shared the stem.
+///
+/// `create_new` is what makes that safe — it fails rather than opening
+/// something that already exists, so an occupied name costs another attempt
+/// instead of somebody's data.
+fn create_scratch_file(
+    out: &std::path::Path,
+) -> std::io::Result<(std::path::PathBuf, std::fs::File)> {
+    let dir = out.parent().unwrap_or(std::path::Path::new("."));
+    let stem = out
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "out".to_string());
+    let pid = std::process::id();
+
+    for attempt in 0..1_000u32 {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0)
+            .wrapping_add(attempt);
+        let candidate = dir.join(format!(".{stem}.{pid}.{nonce}.tmp"));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(f) => return Ok((candidate, f)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "exhausted scratch file name attempts",
+    ))
+}
+
 fn cmd_build(args: BuildArgs) -> u8 {
     let (arena, entries) = match parse_validated(&args.data, &args.parse) {
         Ok(parts) => parts,
@@ -79,12 +123,19 @@ fn cmd_build(args: BuildArgs) -> u8 {
 
     // Write to a temporary sibling then rename, so a failed build never
     // leaves a half-written artifact that a later stage would happily load.
-    let tmp = args.out.with_extension("tmp");
-    let result = std::fs::File::create(&tmp).and_then(|f| {
-        let mut w = std::io::BufWriter::new(f);
-        compiled::write_compiled(&mut w, &arena, &entries, flags)?;
-        std::io::Write::flush(&mut w)
-    });
+    let (tmp, file) = match create_scratch_file(&args.out) {
+        Ok(pair) => pair,
+        Err(e) => {
+            eprintln!("error: cannot create a scratch file next to {}: {e}", {
+                args.out.display()
+            });
+            return EXIT_IO;
+        }
+    };
+    let result = {
+        let mut w = std::io::BufWriter::new(file);
+        compiled::write_compiled(&mut w, &arena, &entries, flags).and_then(|()| w.flush())
+    };
     if let Err(e) = result {
         eprintln!("error: cannot write {}: {e}", tmp.display());
         let _ = std::fs::remove_file(&tmp);

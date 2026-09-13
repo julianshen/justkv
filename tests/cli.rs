@@ -111,6 +111,72 @@ fn build_preserves_allow_binary_as_a_flag_in_the_file() {
 }
 
 #[test]
+fn build_does_not_disturb_an_unrelated_sibling_tmp_file() {
+    // `-o kv.bin` once derived its scratch path by swapping the extension,
+    // which truncated whatever `kv.tmp` already held and deleted it on the
+    // error paths. That file belongs to the user, not to us.
+    let src = write("stem-src.csv", b"a,1\nb,2\n");
+    let dir = std::env::temp_dir().join(format!("justkv-stem-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dst = dir.join("kv.bin");
+    let bystander = dir.join("kv.tmp");
+    std::fs::write(&bystander, b"precious user data").unwrap();
+
+    let out = bin()
+        .arg("build")
+        .arg(&src)
+        .arg("-o")
+        .arg(&dst)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        std::fs::read(&bystander).unwrap(),
+        b"precious user data",
+        "build overwrote an unrelated sibling file"
+    );
+
+    // And the scratch file itself must not be left behind.
+    let strays: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
+        .filter(|n| n != "kv.bin" && n != "kv.tmp")
+        .collect();
+    assert!(strays.is_empty(), "left scratch files behind: {strays:?}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn build_failure_leaves_no_scratch_file_behind() {
+    let src = write("stem-bad.csv", b"a,1\na,2\n");
+    let dir = std::env::temp_dir().join(format!("justkv-stemfail-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dst = dir.join("kv.bin");
+
+    let out = bin()
+        .arg("build")
+        .arg(&src)
+        .arg("-o")
+        .arg(&dst)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let left: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
+        .collect();
+    assert!(left.is_empty(), "left files behind after failure: {left:?}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn healthcheck_fails_when_nothing_is_listening() {
     let out = bin()
         .arg("healthcheck")
