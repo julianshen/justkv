@@ -15,9 +15,11 @@ RUN cp target/x86_64-unknown-linux-musl/release/justkv /justkv
 FROM builder AS data
 ARG DATA=data/example.tsv
 ARG CHECK_FLAGS=""
-COPY ${DATA} /input.data
-RUN /justkv check /input.data ${CHECK_FLAGS}
-RUN /justkv build /input.data -o /kv.bin ${CHECK_FLAGS}
+# Copy into a DIRECTORY (note the trailing slash) so the original filename —
+# and with it the extension that delimiter inference depends on — survives.
+COPY ${DATA} /input/
+RUN set -eu; f=$(find /input -type f | head -1); /justkv check "$f" ${CHECK_FLAGS}
+RUN set -eu; f=$(find /input -type f | head -1); /justkv build "$f" -o /kv.bin ${CHECK_FLAGS}
 
 # --- Stage 3: runtime -------------------------------------------------------
 FROM scratch
