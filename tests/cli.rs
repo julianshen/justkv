@@ -69,3 +69,14 @@ fn build_preserves_allow_binary_as_a_flag_in_the_file() {
     let (_, _, flags) = justkv::store::compiled::read_compiled(&data).unwrap();
     assert_eq!(flags & justkv::store::compiled::FLAG_BINARY, justkv::store::compiled::FLAG_BINARY);
 }
+
+#[test]
+fn healthcheck_fails_when_nothing_is_listening() {
+    let out = bin()
+        .arg("healthcheck")
+        .arg("--bind")
+        .arg("127.0.0.1:1")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+}

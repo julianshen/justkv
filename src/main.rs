@@ -1,10 +1,11 @@
 use clap::Parser;
-use justkv::config::{BuildArgs, Cli, Command, DataArgs, ServeArgs};
+use justkv::config::{BuildArgs, Cli, Command, DataArgs, HealthArgs, ServeArgs};
 use justkv::metrics::Metrics;
 use justkv::server::{AppState, DEFAULT_CONTENT_TYPE, run};
 use justkv::store::compiled;
 use justkv::store::csv_loader::parse_csv;
 use justkv::store::{Loaded, LoadFailure, compiled::FLAG_BINARY, load};
+use std::io::{Read, Write};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Instant;
@@ -19,10 +20,7 @@ fn main() -> ExitCode {
         Command::Check(args) => cmd_check(args),
         Command::Build(args) => cmd_build(args),
         Command::Serve(args) => cmd_serve(args),
-        Command::Healthcheck(_) => {
-            eprintln!("healthcheck is not implemented yet");
-            EXIT_IO
-        }
+        Command::Healthcheck(args) => cmd_healthcheck(args),
     };
     ExitCode::from(code)
 }
@@ -167,5 +165,58 @@ fn cmd_serve(args: ServeArgs) -> u8 {
             eprintln!("error: {e}");
             EXIT_IO
         }
+    }
+}
+
+/// Probe /health over a raw socket.
+///
+/// Hand-rolled rather than using an HTTP client because the runtime image is
+/// `FROM scratch`: there is no curl and no shell, so the binary must be able
+/// to health-check itself, and pulling in a TLS-capable client for a plaintext
+/// localhost GET would be pure weight.
+fn cmd_healthcheck(args: HealthArgs) -> u8 {
+    // 0.0.0.0 is a bind address, not a destination.
+    let target = args.bind.replace("0.0.0.0:", "127.0.0.1:").replace("[::]:", "[::1]:");
+
+    let timeout = std::time::Duration::from_secs(2);
+    let addrs: Vec<std::net::SocketAddr> = match std::net::ToSocketAddrs::to_socket_addrs(&target) {
+        Ok(a) => a.collect(),
+        Err(e) => {
+            eprintln!("healthcheck: cannot resolve {target}: {e}");
+            return 1;
+        }
+    };
+    let Some(addr) = addrs.first() else {
+        eprintln!("healthcheck: no address for {target}");
+        return 1;
+    };
+
+    let mut stream = match std::net::TcpStream::connect_timeout(addr, timeout) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("healthcheck: cannot connect to {addr}: {e}");
+            return 1;
+        }
+    };
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+
+    let req = format!("GET /health HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+    if let Err(e) = stream.write_all(req.as_bytes()) {
+        eprintln!("healthcheck: write failed: {e}");
+        return 1;
+    }
+
+    let mut buf = Vec::new();
+    if let Err(e) = stream.read_to_end(&mut buf) {
+        eprintln!("healthcheck: read failed: {e}");
+        return 1;
+    }
+    let head = String::from_utf8_lossy(&buf[..buf.len().min(64)]).to_string();
+    if head.starts_with("HTTP/1.1 200") {
+        0
+    } else {
+        eprintln!("healthcheck: unexpected response: {}", head.lines().next().unwrap_or(""));
+        1
     }
 }
