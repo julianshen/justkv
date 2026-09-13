@@ -3,11 +3,14 @@
 Reproducible measurement of the throughput and memory-efficiency requirements
 from the spec. Re-run after any change to the store or HTTP layer.
 
-Numbers in this file are measured on a remote x86_64 Linux host (the local
-development machine here does not have the disk headroom for a 1M-row
-dataset plus a release build). Every value cell below is either an observed
-measurement or explicitly marked `_pending measurement_` — none are
-estimated, extrapolated, or guessed.
+The numbers below were measured on a remote x86_64 Linux host (AMD Ryzen 7
+4800U with Radeon Graphics, 16 logical CPUs), by the controller running this
+task — not on this development machine, which does not have the disk
+headroom for a 1,000,000-row dataset plus a release build. The server ran
+natively (not containerised); the load generator (`ab`) ran co-located on
+the same host. Every value cell below is either an observed measurement, a
+configured input, or explicitly marked `_pending measurement_` where a
+figure was not collected — none are estimated, extrapolated, or guessed.
 
 ## Setup
 
@@ -17,30 +20,95 @@ estimated, extrapolated, or guessed.
 
 ## Load
 
+The measurements below were produced with ApacheBench (`ab`), keep-alive
+enabled:
+
+    ab -k -c 50 -n 200000 http://127.0.0.1:8200/kv/key500000
+
+`oha` is an equally valid alternative load generator for this endpoint if
+you don't have `ab` installed:
+
     oha -z 30s -c 50 --no-tui http://127.0.0.1:8200/kv/key500000
 
 ## Results
 
 | Measurement | Value |
 |---|---|
-| Machine | _pending measurement_ |
+| Machine | AMD Ryzen 7 4800U with Radeon Graphics, 16 logical CPUs, Linux |
 | Rows | 1,000,000 |
-| Source TSV size | _pending measurement_ |
-| Compiled size | _pending measurement_ |
-| RSS after load | _pending measurement_ |
-| RSS overhead vs data | _pending measurement_ |
-| Startup, CSV | _pending measurement_ |
-| Startup, compiled | _pending measurement_ |
-| Throughput | _pending measurement_ |
-| p50 / p99 latency | _pending measurement_ |
-| Image size | _pending measurement_ |
+| Source TSV size | 38 MB |
+| Compiled size | 52 MB |
+| RSS after load | 76,108 kB (74.3 MiB), compiled format |
+| RSS overhead vs data | arena_bytes = 37,777,780 (~36.0 MiB); RSS is ~74.3 MiB — see Memory analysis below |
+| Startup, CSV | 547.97 ms |
+| Startup, compiled | 141.03 ms (~3.9x faster than CSV) |
+| Throughput | 43,857.90 req/s (hit), 44,302.68 req/s (miss), 43,921.04 req/s (`--no-metrics`) — see caveat below |
+| p50 / p99 latency | 1 ms / 2 ms (mean 1.143 ms, c=50) |
+| Image size | 2.92 MB |
+
+### Supporting detail
+
+- `justkv build` compile time: 0.50 s real.
+- Memory, compiled format: VmRSS after load 76,108 kB (74.3 MiB); VmRSS
+  after serving 250,000 requests 78,884 kB (77.0 MiB); VmHWM (peak)
+  108,492 kB (106.0 MiB).
+- Memory, CSV format: VmRSS after load 76,424 kB (74.6 MiB); VmHWM (peak)
+  113,196 kB (110.5 MiB).
+- Throughput run: `ab -k -c 50 -n 200000`. Hit (`/kv/key500000`):
+  43,857.90 req/s, 0 failed requests, transfer 7,281 KB/s. Miss
+  (`/kv/definitely_absent`): 44,302.68 req/s, 50,000 non-2xx responses
+  (correct — all 404). With `--no-metrics`: 43,921.04 req/s, 0 failed.
+- `/metrics` after the run, confirming correct accounting:
+  `justkv_requests_total 250000`, `justkv_hits_total 200000`,
+  `justkv_misses_total 50000`, `justkv_keys 1000000`,
+  `justkv_arena_bytes 37777780`.
+
+## Memory analysis
+
+The 74.3 MiB RSS looks large against 36 MiB of key/value data; the
+breakdown accounts for it:
+
+- Arena (key/value bytes): 37,777,780 bytes (~36.0 MiB).
+- Hash table: 1,000,000 entries at 16 bytes each, rounded up to a
+  power-of-two slot count, so ~32 MiB.
+- Arena + hash table together are ~68 MiB; the remaining ~6 MiB is binary,
+  runtime, and allocator overhead, bringing the total to the observed
+  ~74 MiB.
+- VmHWM (~106 MiB compiled, ~110.5 MiB CSV) is higher than steady-state RSS
+  because of the transient double-hold during load (the input file buffer
+  is still resident while the arena is being populated) — this matches
+  what the design doc predicts, rather than indicating a leak.
+
+## Caveats
+
+1. **Throughput figures may be client-bound, not server-bound.** `ab` is
+   single-threaded and ran on the same machine as the server. The
+   near-identical hit / miss / `--no-metrics` results (43.86k / 44.30k /
+   43.92k req/s — a ~1% spread) are consistent with hitting a client-side
+   ceiling rather than the server's true maximum. Treat the throughput
+   numbers above as a **floor** on server capacity, not a measured
+   maximum. A follow-up run with a multi-threaded or remote load generator
+   is needed to establish the real ceiling.
+2. **Per-request metrics overhead is not measurable at this request
+   rate.** `--no-metrics` (43,921.04 req/s) was within noise of the
+   default run (43,857.90 req/s hit / 44,302.68 req/s miss) — about a 1%
+   spread either way. This is an observation that overhead wasn't visible
+   at this load, not proof that per-request timing is free; a more
+   sensitive measurement (e.g. server-bound throughput, or CPU-time rather
+   than wall-clock) would be needed to actually isolate the cost.
+3. **Startup times were slower than the design spec predicted.** The spec
+   estimated ~30-50 ms for compiled-format startup and ~200-400 ms for
+   CSV. Actual measured values were 141.03 ms (compiled) and 547.97 ms
+   (CSV) — both notably slower than predicted. This is recorded here as an
+   observation; the spec's estimates were optimistic and are not being
+   quietly revised to match.
 
 ## Notes
 
-- `--no-metrics` disables per-request timing; compare against the figures above
-  to see what observability costs on this hardware.
+- `--no-metrics` disables per-request timing; see caveat 2 above — the
+  difference was not measurable at this request rate on this hardware.
 - Keys containing `/` are served via `/kv?k=...`; see the spec for why.
-- Measurements above are pending a run on a host with sufficient disk (this
-  worktree has ~1 GiB free, insufficient for a 1,000,000-row dataset plus a
-  release build). Do not fill in plausible-looking numbers here — replace
-  `_pending measurement_` only with values actually observed from a real run.
+- These measurements were taken on a remote host by the controller running
+  this task, not reproduced independently in this repository's own CI or
+  development environment. Re-run and update this file after any change to
+  the store or HTTP layer, or when moving to different hardware.
