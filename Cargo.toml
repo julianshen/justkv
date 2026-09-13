@@ -12,11 +12,16 @@ name = "justkv"
 path = "src/main.rs"
 
 [dependencies]
+anyhow = "1"
+axum = "0.8"
 bytes = "1"
 clap = { version = "4", features = ["derive", "env"] }
 csv = "1.4"
 foldhash = "0.2"
 hashbrown = "0.17"
+percent-encoding = "2"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal"] }
 
 [dev-dependencies]
 proptest = "1"

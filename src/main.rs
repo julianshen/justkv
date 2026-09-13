@@ -1,8 +1,13 @@
 use clap::Parser;
-use justkv::config::{BuildArgs, Cli, Command, DataArgs};
+use justkv::config::{BuildArgs, Cli, Command, DataArgs, ServeArgs};
+use justkv::metrics::Metrics;
+use justkv::server::{AppState, DEFAULT_CONTENT_TYPE, run};
 use justkv::store::compiled;
 use justkv::store::csv_loader::parse_csv;
+use justkv::store::{Loaded, LoadFailure, compiled::FLAG_BINARY, load};
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::time::Instant;
 
 const EXIT_OK: u8 = 0;
 const EXIT_INVALID_DATA: u8 = 1;
@@ -13,10 +18,7 @@ fn main() -> ExitCode {
     let code = match cli.command {
         Command::Check(args) => cmd_check(args),
         Command::Build(args) => cmd_build(args),
-        Command::Serve(_) => {
-            eprintln!("serve is not implemented yet");
-            EXIT_IO
-        }
+        Command::Serve(args) => cmd_serve(args),
         Command::Healthcheck(_) => {
             eprintln!("healthcheck is not implemented yet");
             EXIT_IO
@@ -99,4 +101,71 @@ fn cmd_build(args: BuildArgs) -> u8 {
         arena.len()
     );
     EXIT_OK
+}
+
+fn cmd_serve(args: ServeArgs) -> u8 {
+    let opts = args.parse.load_options(&args.data);
+    let loaded: Loaded = match load(&args.data, &opts) {
+        Ok(l) => l,
+        Err(LoadFailure::Io(e)) => {
+            eprintln!("error: cannot read {}: {e}", args.data.display());
+            return EXIT_IO;
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return EXIT_INVALID_DATA;
+        }
+    };
+
+    // A compiled file built with --allow-binary carries the flag, so a binary
+    // dataset stays correctly typed without re-passing the flag at serve time.
+    let binary = loaded.flags & FLAG_BINARY != 0;
+    let content_type = args.content_type.clone().unwrap_or_else(|| {
+        if binary {
+            "application/octet-stream".to_string()
+        } else {
+            DEFAULT_CONTENT_TYPE.to_string()
+        }
+    });
+    let content_type = match axum::http::HeaderValue::from_str(&content_type) {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("error: invalid --content-type value: {content_type:?}");
+            return EXIT_IO;
+        }
+    };
+
+    let state = Arc::new(AppState {
+        keys: loaded.store.len(),
+        arena_bytes: loaded.store.arena_len(),
+        source: loaded.source.display().to_string(),
+        format: loaded.format.as_str(),
+        load_ms: loaded.load_duration.as_secs_f64() * 1000.0,
+        store: Arc::new(loaded.store),
+        metrics: Arc::new(Metrics::new()),
+        default_value: args.default_value.map(|s| bytes::Bytes::from(s.into_bytes())),
+        content_type,
+        started: Instant::now(),
+        timing: !args.no_metrics,
+    });
+
+    let mut rt = tokio::runtime::Builder::new_multi_thread();
+    rt.enable_all();
+    if let Some(w) = args.workers {
+        rt.worker_threads(w.max(1));
+    }
+    let rt = match rt.build() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: cannot start runtime: {e}");
+            return EXIT_IO;
+        }
+    };
+    match rt.block_on(run(state, &args.bind)) {
+        Ok(()) => EXIT_OK,
+        Err(e) => {
+            eprintln!("error: {e}");
+            EXIT_IO
+        }
+    }
 }
