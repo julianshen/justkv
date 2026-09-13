@@ -25,3 +25,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal
 
 [dev-dependencies]
 proptest = "1"
+
+[[example]]
+name = "gen"
+path = "bench/gen.rs"
