@@ -96,8 +96,12 @@ pub fn read_compiled(data: &[u8]) -> Result<(Vec<u8>, Vec<Entry>, u32), Compiled
             v_off: le_u32(&data[o + 8..o + 12]),
             v_len: le_u32(&data[o + 12..o + 16]),
         };
-        let k_end = e.k_off as usize + e.k_len as usize;
-        let v_end = e.v_off as usize + e.v_len as usize;
+        let k_end = (e.k_off as usize)
+            .checked_add(e.k_len as usize)
+            .ok_or(CompiledError::OutOfBounds { index: i })?;
+        let v_end = (e.v_off as usize)
+            .checked_add(e.v_len as usize)
+            .ok_or(CompiledError::OutOfBounds { index: i })?;
         if k_end > arena_len || v_end > arena_len {
             return Err(CompiledError::OutOfBounds { index: i });
         }
@@ -189,6 +193,15 @@ mod tests {
     fn rejects_entry_pointing_outside_arena() {
         let arena = b"abc".to_vec();
         let entries = vec![Entry { k_off: 0, k_len: 1, v_off: 1, v_len: 99 }];
+        let mut buf = Vec::new();
+        write_compiled(&mut buf, &arena, &entries, 0).unwrap();
+        assert!(matches!(read_compiled(&buf).unwrap_err(), CompiledError::OutOfBounds { index: 0 }));
+    }
+
+    #[test]
+    fn rejects_entry_whose_offset_plus_length_would_overflow() {
+        let arena = b"abc".to_vec();
+        let entries = vec![Entry { k_off: u32::MAX, k_len: u32::MAX, v_off: 0, v_len: 1 }];
         let mut buf = Vec::new();
         write_compiled(&mut buf, &arena, &entries, 0).unwrap();
         assert!(matches!(read_compiled(&buf).unwrap_err(), CompiledError::OutOfBounds { index: 0 }));
