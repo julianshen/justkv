@@ -8,9 +8,12 @@ The numbers below were measured on a remote x86_64 Linux host (AMD Ryzen 7
 task — not on this development machine, which does not have the disk
 headroom for a 1,000,000-row dataset plus a release build. The server ran
 natively (not containerised); the load generator (`ab`) ran co-located on
-the same host. Every value cell below is either an observed measurement, a
-configured input, or explicitly marked `_pending measurement_` where a
-figure was not collected — none are estimated, extrapolated, or guessed.
+the same host. Every value cell in the Results table below is either an
+observed measurement, a configured input, or explicitly marked
+`_pending measurement_` where a figure was not collected — none are
+estimated, extrapolated, or guessed. The separate "Memory analysis"
+section below the table is explicitly labelled as an estimate and draws
+out which of its claims are measured versus inferred.
 
 ## Setup
 
@@ -63,21 +66,32 @@ you don't have `ab` installed:
   `justkv_misses_total 50000`, `justkv_keys 1000000`,
   `justkv_arena_bytes 37777780`.
 
-## Memory analysis
+## Memory analysis (estimate, not measured)
 
-The 74.3 MiB RSS looks large against 36 MiB of key/value data; the
-breakdown accounts for it:
+Only total process RSS (and VmHWM) were measured. The breakdown below is a
+plausibility check on those numbers, not an observation — nothing here was
+instrumented, and no tool broke down the process's memory into arena vs.
+hash table vs. everything else.
 
-- Arena (key/value bytes): 37,777,780 bytes (~36.0 MiB).
-- Hash table: 1,000,000 entries at 16 bytes each, rounded up to a
-  power-of-two slot count, so ~32 MiB.
-- Arena + hash table together are ~68 MiB; the remaining ~6 MiB is binary,
-  runtime, and allocator overhead, bringing the total to the observed
-  ~74 MiB.
-- VmHWM (~106 MiB compiled, ~110.5 MiB CSV) is higher than steady-state RSS
-  because of the transient double-hold during load (the input file buffer
-  is still resident while the arena is being populated) — this matches
-  what the design doc predicts, rather than indicating a leak.
+- Arena: 37,777,780 bytes (~36.0 MiB) — **measured**, reported by `/stats`
+  as `arena_bytes`.
+- Hash table: **inference**. `Entry` is 16 bytes (four `u32` fields:
+  `k_off`, `k_len`, `v_off`, `v_len` — verifiable in `src/store/mod.rs`).
+  With 1,000,000 entries, and assuming hashbrown rounds the slot count up
+  to a power of two, this would imply roughly 32 MiB of table storage — but
+  the table's actual allocation was never measured directly.
+- Total: **inference**. Arena + estimated hash table would account for
+  ~68 MiB of the measured 74.3 MiB RSS, with the remaining ~6 MiB
+  plausibly binary, runtime, and allocator overhead. The arithmetic is
+  consistent with the measured RSS, which is weak evidence the layout
+  behaves as designed — it is not proof: a different split summing to the
+  same total would look identical from outside.
+- VmHWM (~106 MiB compiled, ~110.5 MiB CSV) being higher than steady-state
+  RSS is also **inference, not measured**: a plausible explanation is a
+  transient double-hold during load (the input file buffer still resident
+  while the arena is being populated), which is what the design doc
+  predicts — but no instrumentation confirmed that mechanism specifically;
+  it is offered as the most likely explanation, not a verified cause.
 
 ## Caveats
 
