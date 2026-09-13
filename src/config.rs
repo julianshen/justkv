@@ -21,11 +21,28 @@ pub enum Command {
     Healthcheck(HealthArgs),
 }
 
+/// Delimiters are single ASCII bytes. Rejecting non-ASCII at parse time keeps
+/// `load_options` infallible and stops a mistyped delimiter from silently
+/// parsing the whole dataset against an arbitrary truncated byte.
+fn parse_ascii_delimiter(s: &str) -> Result<char, String> {
+    let mut chars = s.chars();
+    let c = chars
+        .next()
+        .ok_or_else(|| "delimiter must be exactly one character".to_string())?;
+    if chars.next().is_some() {
+        return Err(format!("delimiter must be exactly one character, got {s:?}"));
+    }
+    if !c.is_ascii() {
+        return Err(format!("delimiter must be an ASCII character, got {c:?}"));
+    }
+    Ok(c)
+}
+
 /// Parsing flags shared by serve, check and build.
 #[derive(Args, Debug, Clone)]
 pub struct ParseArgs {
     /// Field delimiter; defaults to tab for .tsv, comma otherwise
-    #[arg(long)]
+    #[arg(long, value_parser = parse_ascii_delimiter)]
     pub delimiter: Option<char>,
     /// Skip the first row
     #[arg(long)]
@@ -40,7 +57,8 @@ impl ParseArgs {
         LoadOptions {
             delimiter: self
                 .delimiter
-                .map(|c| c as u32 as u8)
+                // Safe: parse_ascii_delimiter guarantees c.is_ascii().
+                .map(|c| c as u8)
                 .unwrap_or_else(|| LoadOptions::delimiter_for_path(path)),
             has_header: self.header,
             allow_binary: self.allow_binary,
@@ -166,5 +184,21 @@ mod tests {
         let cli = Cli::try_parse_from(["justkv", "healthcheck"]).unwrap();
         let Command::Healthcheck(a) = cli.command else { panic!("expected healthcheck") };
         assert_eq!(a.bind, "0.0.0.0:8080");
+    }
+
+    #[test]
+    fn rejects_non_ascii_delimiter() {
+        let err = Cli::try_parse_from(["justkv", "check", "d.csv", "--delimiter", "€"])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("ASCII"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_multi_character_delimiter() {
+        let err = Cli::try_parse_from(["justkv", "check", "d.csv", "--delimiter", "ab"])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("exactly one character"), "got: {err}");
     }
 }
