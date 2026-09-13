@@ -138,6 +138,9 @@ pub fn parse_csv(data: &[u8], opts: &LoadOptions) -> Result<(Vec<u8>, Vec<Entry>
             let e = &entries[i as usize];
             &arena[e.k_off as usize..(e.k_off + e.k_len) as usize] == key
         });
+        // These two checks are independent: a row can be both a duplicate and
+        // carry an invalid value, and `check` promises every problem in one
+        // run. Neither may short-circuit the other.
         if let Some(&idx) = dup {
             errors.push(DataError {
                 line,
@@ -146,7 +149,6 @@ pub fn parse_csv(data: &[u8], opts: &LoadOptions) -> Result<(Vec<u8>, Vec<Entry>
                     first_line: lines[idx as usize],
                 },
             });
-            continue;
         }
 
         if !opts.allow_binary && std::str::from_utf8(val).is_err() {
@@ -154,6 +156,15 @@ pub fn parse_csv(data: &[u8], opts: &LoadOptions) -> Result<(Vec<u8>, Vec<Entry>
                 line,
                 kind: DataErrorKind::InvalidUtf8Value,
             });
+        }
+
+        // A duplicate keeps the first occurrence, so it is never appended. A
+        // row whose only fault is its value still is: recording its key means
+        // a later duplicate of that key is reported in this same run, instead
+        // of only surfacing after the user fixes the value and runs again.
+        // Rows appended this way are never observable — `parse_csv` returns
+        // the errors instead of the parts whenever any error was recorded.
+        if dup.is_some() {
             continue;
         }
 
@@ -317,5 +328,60 @@ mod tests {
     fn error_display_mentions_line_number() {
         let errs = parse_csv(b"a,1\na,2\n", &LoadOptions::default()).unwrap_err();
         assert!(errs[0].to_string().contains("line 2"), "got: {}", errs[0]);
+    }
+
+    // `check` promises every problem in one run. A row can be wrong in more
+    // than one way, and one bad row must not hide a problem in a later one.
+
+    #[test]
+    fn a_row_that_is_both_duplicate_and_invalid_utf8_reports_both() {
+        let errs = parse_csv(b"a,1\na,\xff\xfe\n", &LoadOptions::default()).unwrap_err();
+        assert_eq!(errs.len(), 2, "got: {errs:?}");
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e.kind, DataErrorKind::DuplicateKey { .. })),
+            "got: {errs:?}"
+        );
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e.kind, DataErrorKind::InvalidUtf8Value)),
+            "got: {errs:?}"
+        );
+        assert!(errs.iter().all(|e| e.line == 2), "got: {errs:?}");
+    }
+
+    #[test]
+    fn a_key_first_seen_on_an_invalid_row_still_reports_its_duplicate() {
+        // Line 1 has an invalid value; line 2 repeats its key. Reporting only
+        // the bad value would force a second run to discover the duplicate.
+        let errs = parse_csv(b"a,\xff\xfe\na,2\n", &LoadOptions::default()).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e.kind, DataErrorKind::InvalidUtf8Value) && e.line == 1),
+            "got: {errs:?}"
+        );
+        assert!(
+            errs.iter().any(|e| matches!(
+                &e.kind,
+                DataErrorKind::DuplicateKey { key, first_line }
+                    if key == "a" && *first_line == 1
+            ) && e.line == 2),
+            "got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn a_duplicate_row_does_not_displace_the_first_occurrence() {
+        let opts = LoadOptions {
+            allow_binary: true,
+            ..LoadOptions::default()
+        };
+        // Duplicates are still errors, but the value kept for the key must be
+        // the first one seen, not the last.
+        let errs = parse_csv(b"a,first\na,second\n", &opts).unwrap_err();
+        assert_eq!(errs.len(), 1, "got: {errs:?}");
+        let (arena, entries) = parse_csv(b"a,first\nb,second\n", &opts).unwrap();
+        let s = crate::store::Store::from_parts(arena, entries);
+        assert_eq!(s.get(b"a").as_deref(), Some(&b"first"[..]));
     }
 }
