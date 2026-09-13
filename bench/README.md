@@ -135,7 +135,7 @@ limit.
 |---|---|
 | Cluster | k3s v1.34.4+k3s1, single node (control-plane + worker) |
 | Node | Fedora 41, AMD Ryzen 7 4800U, 16 logical CPUs, 62 GiB RAM |
-| Node baseline | ~50% CPU and ~61% memory already in use by unrelated workloads |
+| Node baseline | ~6% CPU, ~62% memory from unrelated workloads (steady, sampled after teardown) |
 | Server image | `alpine:3.20` running a static-PIE musl `justkv` (2.95 MB) via `hostPath` |
 | Dataset | 1,000,000 keys, compiled format, arena 37,777,780 bytes |
 | Startup | 160.06 ms to load `kv.bin` in-cluster |
@@ -214,9 +214,17 @@ arena and a per-request path that allocates nothing should produce.
    single-core number (21,872 req/s at 94% CPU) is a measured saturation
    point.
 2. **Client and server share one node.** This is a single-node k3s cluster,
-   so the generator's 4 cores and the server's 4 come out of the same 16,
-   alongside ~8 cores of unrelated workload already running. Cross-node
-   generation would remove this.
+   so the generator's 4 cores and the server's 4 come out of the same 16.
+   Unrelated workloads on the node used ~6% CPU and ~62% memory, so CPU
+   contention from them was negligible; memory was not a constraint at the
+   ~80 MiB the server used. Cross-node generation would remove the sharing
+   entirely.
+
+   An earlier draft of this section claimed a ~50% CPU baseline. That
+   reading was taken moments after a native release build and a 1,000,000
+   row dataset generation on the same host, and measured that, not the
+   steady state. Corrected rather than left standing: it overstated the
+   contention and so flattered the results' caveats.
 3. **Do not compare these numbers to an earlier revision of this file.** An
    initial pass used a heavier k6 configuration (response bodies retained,
    two redundant custom `Trend` metrics) and reported lower throughput on 4
