@@ -117,6 +117,130 @@ hash table vs. everything else.
    observation; the spec's estimates were optimistic and are not being
    quietly revised to match.
 
+## Kubernetes load test (k6 on k3s)
+
+A second, independent measurement run on 2026-09-13, specifically to attack
+caveat 1 above: the `ab` figures could not be trusted as server throughput
+because `ab` is single-threaded and shared a host with the server. k6 is
+multi-threaded and ran in its own pod with its own CPU quota, so client and
+server contend only through the node.
+
+Every number in this section is measured. Where a ceiling was not reached,
+the section says so rather than reporting the highest observed value as a
+limit.
+
+### Environment
+
+| | |
+|---|---|
+| Cluster | k3s v1.34.4+k3s1, single node (control-plane + worker) |
+| Node | Fedora 41, AMD Ryzen 7 4800U, 16 logical CPUs, 62 GiB RAM |
+| Node baseline | ~50% CPU and ~61% memory already in use by unrelated workloads |
+| Server image | `alpine:3.20` running a static-PIE musl `justkv` (2.95 MB) via `hostPath` |
+| Dataset | 1,000,000 keys, compiled format, arena 37,777,780 bytes |
+| Startup | 160.06 ms to load `kv.bin` in-cluster |
+| Generator | `grafana/k6`, separate pod, 4 CPU / 6 GiB |
+| Key mix | uniform random over the keyspace, 1 miss in every 10 requests |
+
+The server ran with `--workers` matched to its CPU quota. Left at the
+default it sizes the tokio pool from the node's 16 cores and thrashes
+against a 4-core cgroup quota.
+
+### Results — server at 4 CPU, one generator
+
+| Scenario | Offered | Achieved | med | p95 | p99 | max | Failures | Server CPU |
+|---|---|---|---|---|---|---|---|---|
+| load (constant arrival) | 10,000/s | 9,983/s | 0.18 ms | 5.07 ms | 14.76 ms | 57.4 ms | 0 | 762m |
+| soak (20 min) | 2,000/s | 2,000/s | 0.35 ms | 0.47 ms | 0.60 ms | 40.0 ms | 0 | 270m median |
+| stress (ramp to 50k) | →50,000/s | 16,178/s mean | 0.28 ms | 1.17 ms | 2.14 ms | 42.8 ms | 0 | 1,815m peak |
+| spike (500 → 60k → 500) | burst 60,000/s | 20,897/s peak 10s | 0.33 ms | 1.24 ms | 2.19 ms | 42.7 ms | 0 | 1,776m peak |
+
+Zero failed requests in every scenario. 12.9 million requests were served
+across the full suite without a restart.
+
+### Results — server at 4 CPU, two generators
+
+One k6 pod on 4 cores tops out near 21,000 req/s, which is *the generator's*
+limit, not the server's. Running two generators concurrently:
+
+| | |
+|---|---|
+| Combined mean | 29,453 req/s |
+| Combined sustained (best 10 s) | **32,298 req/s** |
+| Combined peak (1 s) | 33,820 req/s |
+| p99 | 4.80 ms / 4.99 ms (per generator) |
+| Failures | 0 |
+| Server CPU | 2,414m of a 4,000m quota — **60%** |
+
+The server was still only 60% busy. **The 4-core ceiling was not reached.**
+32,298 req/s is a floor, not a maximum.
+
+### Results — server pinned to 1 CPU
+
+Pinning the server to a single core lets a 4-core generator definitively
+outrun it, which is the only configuration here where saturation was
+actually observed.
+
+| Offered | Achieved (sustained 10 s) | p95 | p99 | Server CPU | Failures |
+|---|---|---|---|---|---|
+| →16,000/s | 15,549/s | 0.53 ms | 1.80 ms | 761m (76%) | 0 |
+| →55,000/s | **21,872/s** | 4.17 ms | 9.22 ms | **944m (94%)** | 0 |
+
+Throughput stayed flat at 21–22k req/s while the offered rate climbed from
+20,000 to 55,000. That plateau, at 94% of one core with rising latency and
+3,597 `dropped_iterations`, is the saturation point of a single core.
+
+Behaviour at saturation is worth stating plainly: latency degraded (p99
+0.53 ms → 9.22 ms) and the generator could not hand off work, but **no
+request failed and the process did not restart**. It queues; it does not
+collapse.
+
+### Memory
+
+| | |
+|---|---|
+| Container RSS, steady | 70–82 MiB (arena is ~36.0 MiB) |
+| Soak drift over 20 min | 74 → 78 MiB (+4 MiB), min 74, max 81 |
+| Requests during soak | 2,399,457 |
+
+No growth trend across 2.4 million requests, which is what an immutable
+arena and a per-request path that allocates nothing should produce.
+
+### Caveats
+
+1. **The 4-core ceiling is still unknown.** Two generators reached 32,298
+   req/s with the server at 60% CPU. A third generator, or generators on a
+   separate node, would be needed to find the actual limit. Only the
+   single-core number (21,872 req/s at 94% CPU) is a measured saturation
+   point.
+2. **Client and server share one node.** This is a single-node k3s cluster,
+   so the generator's 4 cores and the server's 4 come out of the same 16,
+   alongside ~8 cores of unrelated workload already running. Cross-node
+   generation would remove this.
+3. **Do not compare these numbers to an earlier revision of this file.** An
+   initial pass used a heavier k6 configuration (response bodies retained,
+   two redundant custom `Trend` metrics) and reported lower throughput on 4
+   cores than the final harness reports on 1. Every figure in this section
+   comes from the same harness; the earlier ones were discarded rather than
+   reconciled.
+4. **k6 harness notes, recorded because both bit during this run.** Tagging
+   requests by URL gives one metric series per key — 400,340 series in five
+   seconds against this keyspace, and the generator OOMs before the server
+   notices. A constant `name` tag fixes it. Separately, `Trend` metrics
+   retain every sample for end-of-test percentiles, so memory scales with
+   total iterations: a 20-minute soak at 14k req/s killed a 1 GiB generator
+   at 29%. `http_req_failed` also counts 404 as failure, which reports this
+   test's deliberate miss ratio as a 10% error rate until
+   `http.setResponseCallback(http.expectedStatuses(200, 404))` is set.
+
+### Reproducing
+
+Manifests, k6 scripts and the driver scripts used for this run are not
+committed; they are reproducible from the description above. The shape is:
+build the musl binary, generate and compile the dataset, mount both into a
+stock image via `hostPath`, expose a `ClusterIP`, and drive it with
+`grafana/k6` Jobs reading scripts from a ConfigMap.
+
 ## Notes
 
 - `--no-metrics` disables per-request timing; see caveat 2 above — the
