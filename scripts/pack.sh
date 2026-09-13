@@ -67,30 +67,34 @@ else
   echo "    cargo not found; skipping local validation (the build stage still validates)"
 fi
 
-# The dataset must be inside the build context for COPY to reach it.
-# Note: GNU `realpath --relative-to` is not available on macOS/BSD realpath,
-# so we resolve the absolute path once and strip the repo-root prefix with a
-# portable shell parameter expansion instead.
-ctx_data="$DATA"
-cleanup=""
-# $DATA was already resolved to an absolute path above, before the cd.
-abs_data="$DATA"
-case "$abs_data" in
-  "$repo_root"/*) ctx_data="${abs_data#"$repo_root"/}" ;;
-  *)
-    # Keep the original basename: delimiter inference reads the extension, so
-    # copying a .tsv to a fixed name would silently make it comma-delimited
-    # inside the image — local validation passes, then the build fails with a
-    # confusing "expected 2 columns". The leading dot keeps it out of the way.
-    #
-    # The pid makes the name unique per invocation. Two packaging runs whose
-    # datasets share a basename would otherwise write and delete the same file
-    # in the context, so one could snapshot the other's data or find it gone.
-    ctx_data=".packdata.$$.$(basename "$DATA")"
-    cp "$DATA" "$repo_root/$ctx_data"
-    cleanup="$repo_root/$ctx_data"
-    ;;
+# The dataset must be inside the build context for COPY to reach it, and every
+# input is staged to a generated name at the context root -- including one that
+# already lives in the repository. Passing the user's own path through was
+# wrong three separate ways:
+#
+#   - `.dockerignore` excludes bench, docs and target, so a dataset under any
+#     of them is absent from the context. `pack.sh --data bench/kv.tsv` (the
+#     path this repo's own benchmark generates) passed local validation and
+#     then died at COPY with "not found".
+#   - COPY treats its source as a Go filepath.Match pattern, so a name holding
+#     `*`, `?` or `[...]` may match something other than itself -- or match
+#     several files, after which `find | head -1` compiles whichever came
+#     first.
+#   - Two runs packaging different files that share a basename collided on one
+#     staged path.
+#
+# The staged name is therefore built here, not taken from input: a fixed stem,
+# the pid for uniqueness, and only the extension carried over, because
+# delimiter inference reads it. The extension is stripped of anything that is
+# not alphanumeric so it cannot reintroduce a wildcard.
+base=$(basename "$DATA")
+ext=""
+case "$base" in
+  ?*.*) ext=$(printf '%s' "${base##*.}" | tr -cd '[:alnum:]') ;;
 esac
+ctx_data=".packdata.$$.data${ext:+.$ext}"
+cp "$DATA" "$repo_root/$ctx_data"
+cleanup="$repo_root/$ctx_data"
 trap '[[ -n "$cleanup" ]] && rm -f "$cleanup"' EXIT
 
 echo "==> building $TAG for $PLATFORM from $ctx_data"

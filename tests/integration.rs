@@ -15,9 +15,13 @@ struct Resp {
 /// Minimal HTTP/1.1 client. Avoids adding a client dependency for what is
 /// a handful of plaintext localhost requests.
 async fn get(addr: SocketAddr, target: &str) -> Resp {
+    request(addr, "GET", target).await
+}
+
+async fn request(addr: SocketAddr, method: &str, target: &str) -> Resp {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
-    let req = format!("GET {target} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    let req = format!("{method} {target} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
     s.write_all(req.as_bytes()).await.unwrap();
     let mut raw = Vec::new();
     s.read_to_end(&mut raw).await.unwrap();
@@ -198,4 +202,24 @@ async fn metrics_accumulate_hits_and_bytes() {
         m.body
     );
     assert!(m.body.contains("justkv_keys 4\n"), "{}", m.body);
+}
+
+#[tokio::test]
+async fn head_request_does_not_count_bytes_it_never_sends() {
+    // axum routes HEAD to the GET handler and strips the body afterwards, so
+    // the handler sees a full-size value while the client receives none.
+    // justkv_response_bytes_total advertises bytes written to clients.
+    let addr = boot(state_with(None)).await;
+    let h = request(addr, "HEAD", "/kv/a").await;
+    assert_eq!(h.status, 200);
+    assert!(h.body.is_empty(), "HEAD returned a body: {:?}", h.body);
+
+    let m = get(addr, "/metrics").await;
+    assert!(
+        m.body.contains("justkv_response_bytes_total 0\n"),
+        "HEAD inflated byte accounting:\n{}",
+        m.body
+    );
+    // The lookup itself still counts as a request and a hit.
+    assert!(m.body.contains("justkv_hits_total 1\n"), "{}", m.body);
 }

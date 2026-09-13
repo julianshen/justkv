@@ -2,7 +2,7 @@ use crate::metrics::Outcome;
 use crate::server::AppState;
 use axum::body::Body;
 use axum::extract::{Path, RawQuery, State};
-use axum::http::{StatusCode, header};
+use axum::http::{Method, StatusCode, header};
 use axum::response::Response;
 use std::sync::Arc;
 use std::time::Instant;
@@ -31,13 +31,21 @@ pub(crate) fn key_from_query(q: Option<&str>) -> Option<Vec<u8>> {
     None
 }
 
-pub async fn kv_path(State(s): State<Arc<AppState>>, Path(key): Path<String>) -> Response {
-    lookup(&s, key.as_bytes())
+pub async fn kv_path(
+    State(s): State<Arc<AppState>>,
+    method: Method,
+    Path(key): Path<String>,
+) -> Response {
+    lookup(&s, key.as_bytes(), &method)
 }
 
-pub async fn kv_query(State(s): State<Arc<AppState>>, RawQuery(q): RawQuery) -> Response {
+pub async fn kv_query(
+    State(s): State<Arc<AppState>>,
+    method: Method,
+    RawQuery(q): RawQuery,
+) -> Response {
     match key_from_query(q.as_deref()) {
-        Some(key) => lookup(&s, &key),
+        Some(key) => lookup(&s, &key, &method),
         // No `k` at all is a malformed request, distinct from `k=` (empty key).
         None => Response::builder()
             .status(StatusCode::BAD_REQUEST)
@@ -46,7 +54,7 @@ pub async fn kv_query(State(s): State<Arc<AppState>>, RawQuery(q): RawQuery) -> 
     }
 }
 
-fn lookup(s: &AppState, key: &[u8]) -> Response {
+fn lookup(s: &AppState, key: &[u8], method: &Method) -> Response {
     let start = s.timing.then(Instant::now);
 
     let (outcome, body, status, is_default) = match s.store.get(key) {
@@ -57,7 +65,15 @@ fn lookup(s: &AppState, key: &[u8]) -> Response {
         },
     };
 
-    let len = body.as_ref().map_or(0, |b| b.len());
+    // axum dispatches HEAD to the GET handler and strips the body on the way
+    // out, so `body` here is full size while the client receives nothing.
+    // justkv_response_bytes_total advertises bytes written to clients, so a
+    // HEAD must contribute none. The lookup still counts as a request.
+    let len = if method == Method::HEAD {
+        0
+    } else {
+        body.as_ref().map_or(0, |b| b.len())
+    };
     s.metrics.record(outcome, len, start.map(|t| t.elapsed()));
 
     let mut b = Response::builder().status(status);

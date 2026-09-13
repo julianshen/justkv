@@ -7,7 +7,7 @@ use axum::{Router, routing::get, serve::Listener};
 use bytes::Bytes;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
 
 pub const DEFAULT_CONTENT_TYPE: &str = "text/plain; charset=utf-8";
@@ -48,15 +48,25 @@ impl Listener for NoDelayListener {
     type Addr = SocketAddr;
 
     async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        // Per-call backoff, reset on every success, so an isolated error costs
+        // nothing but a sustained one stops spinning.
+        let mut backoff = Duration::from_millis(1);
         loop {
             match self.0.accept().await {
                 Ok((stream, addr)) => {
                     let _ = stream.set_nodelay(true);
                     return (stream, addr);
                 }
-                // Transient accept errors (EMFILE, connection reset during
-                // handshake) must not kill the server.
-                Err(_) => continue,
+                // Transient accept errors (a connection reset during handshake)
+                // must not kill the server. But a persistent one — EMFILE above
+                // all — leaves the socket readable, so returning straight to
+                // `accept` spins at full CPU and starves the very tasks that
+                // would close connections and release the descriptors. Yield
+                // for a moment instead, growing to a ceiling.
+                Err(_) => {
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(Duration::from_millis(256));
+                }
             }
         }
     }
