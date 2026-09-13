@@ -45,6 +45,9 @@ if [[ ! -f "$DATA" ]]; then
   exit 2
 fi
 
+# Resolve now, before the cd below changes what a relative path means.
+DATA="$(realpath "$DATA")"
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
@@ -63,7 +66,8 @@ fi
 # portable shell parameter expansion instead.
 ctx_data="$DATA"
 cleanup=""
-abs_data="$(realpath "$DATA")"
+# $DATA was already resolved to an absolute path above, before the cd.
+abs_data="$DATA"
 case "$abs_data" in
   "$repo_root"/*) ctx_data="${abs_data#"$repo_root"/}" ;;
   *)
